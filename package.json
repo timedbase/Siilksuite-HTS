@@ -1,11 +1,14 @@
 {
   "name": "hsuite-programmatic-swap-client",
-  "version": "0.1.0",
-  "description": "Minimal programmatic swap client (HSuite-style): shell entrypoint + JS trade engine",
-  "main": "src/trade.js",
+  "version": "1.1.0",
+  "description": "Programmatic swap client for Silksuite DEX: Interactive Terminal UI + JS trading engine",
+  "main": "cli.js",
+  "bin": {
+    "trade": "cli.js"
+  },
   "scripts": {
-    "start": "node src/trade.js",
-    "trade": "node src/trade.js",
+    "start": "node cli.js",
+    "trade": "node cli.js",
     "test-nodes": "node scripts/test-nodes.js"
   },
   "dependencies": {

@@ -33,8 +33,8 @@ cd Siilksuite-HTS
 # Install dependencies
 npm install
 
-# Run the trading client
-./trade.sh
+# Run the interactive trading client
+node cli.js
 ```
 
 ### Option 2: Windows PowerShell
@@ -47,11 +47,9 @@ cd Siilksuite-HTS
 # Install dependencies
 npm install
 
-# Run the trading client via WSL (recommended)
-wsl ./trade.sh
+# Run the interactive trading client
+node cli.js
 ```
-
-Alternatively, use Windows Subsystem for Linux (WSL) for full shell script support.
 
 ### Option 3: Android Terminal (Termux)
 
@@ -70,23 +68,18 @@ Alternatively, use Windows Subsystem for Linux (WSL) for full shell script suppo
    ```
 4. **Run the Trading Client**:
    ```bash
-   bash trade.sh
+   node cli.js
    ```
 
-**Note**: On Termux, use `bash trade.sh` to run the script. Termux provides a native terminal environment on Android where all tools run locally on your device. For better performance with CPU-intensive trading, consider running this on a desktop/laptop or cloud server instead.
+**Note**: Termux provides a native terminal environment on Android where all tools run locally on your device. For better performance with CPU-intensive trading, consider running this on a desktop/laptop or cloud server instead.
 
 ## 📖 Usage Guide
 
 ### Step 1: Wallet Credential Validation
 
-When you run `./trade.sh`, the script will prompt for:
+### When you run the client, you'll proceed through 4 interactive steps:
 
-```
-Hedera account ID (e.g. 0.0.123456): 
-Private key (hidden): 
-```
-
-**The script performs the following validation**:
+**Step 1: Wallet Credential Validation**
 - ✅ Parses the private key using Hedera SDK
 - ✅ Derives your **public key** from the private key
 - ✅ Queries Hedera Mirror Node for Account balance
@@ -177,22 +170,19 @@ The script monitors continuously for the target pool:
 
 ## 🔧 Advanced Usage
 
-### Run with Command-Line Arguments
+### Running the Client
+
+Once installed, run the interactive terminal UI:
 
 ```bash
-./trade.sh \
-  --account 0.0.123456 \
-  --key "302e020100300506032b6570042204203a..." \
-  --debug
+node cli.js
 ```
 
-**Options**:
-- `-a, --account` — Hedera account ID
-- `-k, --key` — Private key (DER format)
-- `-d, --debug` — Keep process alive for debugging
-- `-h, --help` — Show help message
+Alternatively, use npm shortcut:
 
-(Note: Token pairs are selected during interactive prompts)
+```bash
+npm start
+```
 
 ### Test Smart Node Connectivity
 
@@ -221,19 +211,19 @@ MAINNET_OPERATOR_PRIVATE_KEY="302e..." \
 BASE_TOKEN="0.0.786931" \
 BASE_AMOUNT="5000" \
 SWAP_TOKEN="HBAR" \
-node src/trade.js --network mainnet
+node src/trade.js --snipe
 ```
 
 ## 📁 Project Structure
 
 ```
 Siilksuite-HTS/
-├── trade.sh                    # Interactive shell entrypoint
+├── cli.js                     # Interactive terminal UI (main entry point)
 ├── src/
 │   └── trade.js               # Node.js swap engine (core logic)
 ├── scripts/
 │   └── test-nodes.js          # Smart Node connectivity diagnostic
-├── package.json               # Dependencies
+├── package.json               # Dependencies & configuration
 ├── README.md                  # This file
 └── LICENSE                    # OpenGL3 License
 ```
@@ -287,7 +277,7 @@ Silksuite DEX Trading Client workflow (MAINNET ONLY):
 ```
 User (Terminal)
     ↓
-./trade.sh (Interactive Shell - Configuration Stage)
+node cli.js (Interactive Terminal UI - Configuration Stage)
     ├── Step 1: Wallet Credential Validation
     │   └── Verifies Account ID & Private Key via Mirror Node
     ├── Step 2: Configure Swap Parameters & Choose Mode
@@ -315,7 +305,7 @@ User (Terminal)
 ```
 
 **Key Design**:
-- Token associations are handled during configuration (trade.sh Step 3), not during swap execution
+- Token associations are handled during configuration (Step 3), not during swap execution
 - Regular Swap: Execute immediately with your specified amount
 - Snipe Mode: Monitor for target pool and auto-execute when found or after 5-hour timeout
 
