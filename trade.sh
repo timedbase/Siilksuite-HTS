@@ -1,33 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Simple entrypoint for providing your Hedera wallet and running a programmatic swap
-# Usage: ./trade.sh [--network testnet] [--account 0.0.x] [--key <private-key>] --base-token <id> --base-amount <amount> --swap-token <id|HBAR>
+# Silksuite DEX Programmatic Trading Client - MAINNET ONLY
+# This script handles wallet validation and token association configuration
+# Usage: ./trade.sh [--account 0.0.x] [--key <private-key>]
 
 show_help() {
   cat <<EOF
 Usage: $0 [options]
 
 Options:
-  -a, --account        Hedera MAINNET account ID (e.g. 0.0.123456)  (will prompt if omitted)
+  -a, --account        Hedera account ID (e.g. 0.0.123456) (will prompt if omitted)
   -k, --key            Private key (will prompt if omitted)
-  -b, --base-token     Token id to spend (default: 0.0.786931)
-  -A, --base-amount    Amount to spend (required)
-  -s, --swap-token     Token to receive (default: HBAR)
-  -d, --debug          Keep process alive after run for debugging (won't auto-exit)
+  -d, --debug          Keep process alive after run for debugging
   -h, --help           Show this help
 
+Interactive Modes:
+  The script will prompt you to choose between:
+  • Regular Swap: Execute immediately with specified amount
+  • Snipe Mode:   Monitor for pool creation (5 hours max) and auto-execute when found
+
 Example:
-  ./trade.sh -a 0.0.12345 -k "302e02..." -b 0.0.786931 -A 5000 -s HBAR -d
+  ./trade.sh -a 0.0.12345 -k "302e02..."
+
+Note: This client operates on MAINNET only. Test carefully with small amounts.
 EOF
 }
 
-NETWORK="mainnet"
+# MAINNET ONLY - No network selection
 OP_ACCOUNT=""
 OP_KEY=""
 BASE_TOKEN="0.0.786931"
 BASE_AMOUNT=""
 SWAP_TOKEN="HBAR"
+SNIPE_MODE="0"
 DEBUG="0"
 
 # Validate token ID format (accepts HBAR or Hedera token id like 0.0.123456)
@@ -51,9 +57,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -a|--account) OP_ACCOUNT="$2"; shift 2;;
     -k|--key) OP_KEY="$2"; shift 2;;
-    -b|--base-token) BASE_TOKEN="$2"; shift 2;;
-    -A|--base-amount) BASE_AMOUNT="$2"; shift 2;;
-    -s|--swap-token) SWAP_TOKEN="$2"; shift 2;;
     -d|--debug) DEBUG="1"; shift 1;;
     -h|--help) show_help; exit 0;;
     *) echo "Unknown option: $1"; show_help; exit 1;;
@@ -154,20 +157,151 @@ if [ -z "$BASE_AMOUNT" ]; then
   read -rp "Amount to spend (${BASE_TOKEN}): " BASE_AMOUNT
 fi
 
+# Ask if user wants snipe mode
+echo ""
+echo "Swap Mode?"
+echo "  1) Regular Swap (execute immediately)"
+echo "  2) Snipe Mode (monitor pool for 5 hours, execute when found)"
+read -rp "Choose mode [1]: " SWAP_MODE_CHOICE
+SWAP_MODE_CHOICE="${SWAP_MODE_CHOICE:-1}"
+
+if [[ "$SWAP_MODE_CHOICE" == "2" ]]; then
+  SNIPE_MODE="1"
+  echo "✅ Snipe mode enabled (will monitor for pool and execute)"
+else
+  echo "✅ Regular swap mode enabled (execute immediately)"
+fi
+
 # Ensure dependencies
 if [ ! -d node_modules ]; then
   echo "Installing npm dependencies..."
   npm install
 fi
 
+# === STEP 3: ENSURE TOKEN ASSOCIATIONS (Configuration Stage) ===
+echo ""
+echo "=========================================="
+echo "Step 3: Ensuring Token Associations"
+echo "=========================================="
+echo "Checking and associating tokens for swap..."
+
+ASSOC_OUTPUT=$(MAINNET_OPERATOR_ID="$OP_ACCOUNT" MAINNET_OPERATOR_PRIVATE_KEY="$OP_KEY" BASE_TOKEN="$BASE_TOKEN" SWAP_TOKEN="$SWAP_TOKEN" node -e "
+const { Client, AccountId, TokenId, TokenAssociateTransaction, PrivateKey } = require('@hashgraph/sdk');
+const axios = require('axios');
+
+(async () => {
+  try {
+    const opId = process.env.MAINNET_OPERATOR_ID;
+    const privKeyStr = process.env.MAINNET_OPERATOR_PRIVATE_KEY;
+    const baseToken = process.env.BASE_TOKEN;
+    const swapToken = process.env.SWAP_TOKEN;
+    const privKey = PrivateKey.fromString(privKeyStr);
+
+    // Check base token association (if not HBAR)
+    if (baseToken.toUpperCase() !== 'HBAR') {
+      console.log('🔍 Checking base token association: ' + baseToken);
+      try {
+        const mirror = axios.create({ baseURL: 'https://mainnet-public.mirrornode.hedera.com', timeout: 5000 });
+        const resp = await mirror.get('/api/v1/accounts/' + opId);
+        const tokens = resp.data.balance?.tokens || [];
+        const isAssociated = tokens.some(t => t.token_id === baseToken);
+        if (isAssociated) {
+          console.log('✅ Already associated with base token');
+        } else {
+          console.warn('⚠️  Not associated with base token. Attempting association...');
+          const client = Client.forMainnet();
+          client.setOperator(AccountId.fromString(opId), privKey);
+          const txn = await new TokenAssociateTransaction()
+            .setAccountId(AccountId.fromString(opId))
+            .addTokenId(TokenId.fromString(baseToken))
+            .freezeWith(client)
+            .sign(privKey);
+          const resp = await txn.execute(client);
+          const receipt = await resp.getReceipt(client);
+          if (receipt.status.toString() === 'SUCCESS') {
+            console.log('✅ Base token associated (txId: ' + resp.transactionId + ')');
+          } else {
+            throw new Error('Association failed: ' + receipt.status);
+          }
+          await client.close();
+        }
+      } catch (e) {
+        console.warn('⚠️  Base token association check failed: ' + (e.message || e));
+      }
+    } else {
+      console.log('✅ Base token is HBAR (no association needed)');
+    }
+
+    // Check swap token association (if not HBAR) and associate if needed
+    if (swapToken.toUpperCase() !== 'HBAR') {
+      console.log('🔗 Checking swap token association: ' + swapToken);
+      try {
+        const mirror = axios.create({ baseURL: 'https://mainnet-public.mirrornode.hedera.com', timeout: 5000 });
+        const resp = await mirror.get('/api/v1/accounts/' + opId);
+        const tokens = resp.data.balance?.tokens || [];
+        const isAssociated = tokens.some(t => t.token_id === swapToken);
+
+        if (isAssociated) {
+          console.log('✅ Already associated with swap token');
+        } else {
+          console.log('📝 Associating swap token...');
+          const client = Client.forMainnet();
+          client.setOperator(AccountId.fromString(opId), privKey);
+
+          const txn = await new TokenAssociateTransaction()
+            .setAccountId(AccountId.fromString(opId))
+            .addTokenId(TokenId.fromString(swapToken))
+            .freezeWith(client)
+            .sign(privKey);
+
+          const resp = await txn.execute(client);
+          const receipt = await resp.getReceipt(client);
+
+          if (receipt.status.toString() === 'SUCCESS') {
+            console.log('✅ Swap token associated (txId: ' + resp.transactionId + ')');
+          } else {
+            throw new Error('Association failed: ' + receipt.status);
+          }
+          await client.close();
+        }
+      } catch (e) {
+        console.error('❌ Token association error: ' + (e.message || e));
+        process.exit(1);
+      }
+    } else {
+      console.log('✅ Swap token is HBAR (no association needed)');
+    }
+
+    console.log('✅ Token association check complete');
+  } catch (err) {
+    console.error('❌ Error: ' + (err.message || err));
+    process.exit(1);
+  }
+})();
+" 2>&1)
+ASSOC_EXIT=$?
+echo "$ASSOC_OUTPUT"
+if [ $ASSOC_EXIT -ne 0 ]; then
+  echo "❌ Token association failed. Cannot proceed."
+  exit 1
+fi
+
+echo ""
+echo "=========================================="
+echo "Step 4: Executing Swap"
+echo "=========================================="
+
 # Export MAINNET env vars consumed by the JS engine
 export MAINNET_OPERATOR_ID="$OP_ACCOUNT"
 export MAINNET_OPERATOR_PRIVATE_KEY="$OP_KEY"
 export DEBUG="$DEBUG"
-
 export BASE_TOKEN="$BASE_TOKEN"
 export BASE_AMOUNT="$BASE_AMOUNT"
 export SWAP_TOKEN="$SWAP_TOKEN"
 
-# Hand off to Node.js trade engine (mainnet-only)
-node src/trade.js --network "mainnet" --base-token "$BASE_TOKEN" --base-amount "$BASE_AMOUNT" --swap-token "$SWAP_TOKEN"
+# Hand off to Node.js trade engine (mainnet-only, no network arg needed)
+if [[ "$SNIPE_MODE" == "1" ]]; then
+  node src/trade.js --base-token "$BASE_TOKEN" --base-amount "$BASE_AMOUNT" --swap-token "$SWAP_TOKEN" --snipe
+else
+  node src/trade.js --base-token "$BASE_TOKEN" --base-amount "$BASE_AMOUNT" --swap-token "$SWAP_TOKEN"
+fi
