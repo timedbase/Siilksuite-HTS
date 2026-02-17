@@ -16,31 +16,64 @@ const rl = readline.createInterface({
   output: process.stdout
 });
 
+// Track active child processes for cleanup
+let activeChildProcess = null;
+
+// Handle graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\n\n⚠️  Interrupted by user');
+  if (activeChildProcess && !activeChildProcess.killed) {
+    activeChildProcess.kill();
+  }
+  if (!rl.closed) rl.close();
+  process.exit(1);
+});
+
+process.on('SIGTERM', () => {
+  if (activeChildProcess && !activeChildProcess.killed) {
+    activeChildProcess.kill();
+  }
+  if (!rl.closed) rl.close();
+  process.exit(1);
+});
+
 const question = (prompt) => new Promise((resolve) => {
   rl.question(prompt, resolve);
 });
 
 const questionHidden = (prompt) => new Promise((resolve) => {
-  process.stdout.write(prompt);
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-  process.stdin.setEncoding('utf8');
-  
+  // Use simpler approach - just display asterisks
   let password = '';
-  process.stdin.on('data', (char) => {
+  const stdin = process.stdin;
+  
+  process.stdout.write(prompt);
+  
+  stdin.setRawMode(true);
+  stdin.resume();
+  stdin.setEncoding('utf8');
+  
+  const handler = (char) => {
     if (char === '\n' || char === '\r' || char === '\u0004') {
-      process.stdin.setRawMode(false);
-      process.stdin.pause();
+      stdin.removeListener('data', handler);
+      stdin.setRawMode(false);
+      stdin.pause();
       process.stdout.write('\n');
       resolve(password);
     } else if (char === '\u0003') {
+      stdin.removeListener('data', handler);
+      stdin.setRawMode(false);
+      stdin.pause();
       process.exit();
     } else if (char === '\u007f') { // backspace
       password = password.slice(0, -1);
+      process.stdout.write('\b \b');
     } else {
       password += char;
+      process.stdout.write('*');
     }
-  });
+  };
+  
+  stdin.on('data', handler);
 });
 
 // === Step 1: Validate Wallet Credentials ===
@@ -116,6 +149,13 @@ async function configureSwapParameters() {
   // Validate swap token
   if (!isValidToken(swapToken)) {
     throw new Error(`Invalid swap token: ${swapToken}`);
+  }
+  
+  // Ensure base and swap tokens are different
+  const baseNorm = baseToken.toUpperCase();
+  const swapNorm = swapToken.toUpperCase();
+  if (baseNorm === swapNorm) {
+    throw new Error('Base token and swap token must be different');
   }
   
   // Amount
@@ -242,14 +282,14 @@ async function ensureSingleTokenAssociation(client, accountId, privKey, tokenStr
 }
 
 // === Step 4: Execute Swap ===
-async function executeSwap(accountId, privKey, baseToken, baseAmount, swapToken, snipeMode, debugMode) {
+async function executeSwap(accountId, privKeyStr, baseToken, baseAmount, swapToken, snipeMode, debugMode) {
   console.log('\n' + '='.repeat(50));
   console.log('Step 4: Executing Swap');
   console.log('='.repeat(50));
   
   // Set environment variables
   process.env.MAINNET_OPERATOR_ID = accountId;
-  process.env.MAINNET_OPERATOR_PRIVATE_KEY = privKey.toString();
+  process.env.MAINNET_OPERATOR_PRIVATE_KEY = privKeyStr;
   process.env.BASE_TOKEN = baseToken;
   process.env.BASE_AMOUNT = baseAmount;
   process.env.SWAP_TOKEN = swapToken;
@@ -263,9 +303,10 @@ async function executeSwap(accountId, privKey, baseToken, baseAmount, swapToken,
   
   // Execute trade engine
   return new Promise((resolve, reject) => {
-    const child = spawn('node', args, { stdio: 'inherit' });
+    activeChildProcess = spawn('node', args, { stdio: 'inherit' });
     
-    child.on('close', (code) => {
+    activeChildProcess.on('close', (code) => {
+      activeChildProcess = null;
       if (code === 0) {
         resolve();
       } else {
@@ -273,7 +314,8 @@ async function executeSwap(accountId, privKey, baseToken, baseAmount, swapToken,
       }
     });
     
-    child.on('error', (err) => {
+    activeChildProcess.on('error', (err) => {
+      activeChildProcess = null;
       reject(err);
     });
   });
@@ -305,6 +347,9 @@ async function main() {
       throw new Error('Private key is required');
     }
     
+    // Close readline before running heavy operations
+    rl.close();
+    
     // Step 1: Validate credentials
     const { privKey } = await validateWalletCredentials(accountId.trim(), privKeyStr.trim());
     
@@ -315,13 +360,13 @@ async function main() {
     await ensureTokenAssociations(accountId.trim(), privKey, baseToken, swapToken);
     
     // Step 4: Execute swap
-    await executeSwap(accountId.trim(), privKey, baseToken, baseAmount, swapToken, snipeMode, false);
+    await executeSwap(accountId.trim(), privKeyStr.trim(), baseToken, baseAmount, swapToken, snipeMode, false);
     
     console.log('\n✅ Trading flow completed successfully');
-    rl.close();
+    process.exit(0);
   } catch (err) {
     console.error(`\n❌ Error: ${err.message || err}`);
-    rl.close();
+    if (!rl.closed) rl.close();
     process.exit(1);
   }
 }
