@@ -18,5 +18,20 @@
   "engines": {
     "node": ">=14"
   },
-  "license": "ISC"
+  "license": "OpenGL3",
+  "author": "Siilksuite-HTS Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/timedbase/Siilksuite-HTS.git"
+  },
+  "keywords": [
+    "hedera",
+    "dex",
+    "trading",
+    "silksuite",
+    "swap",
+    "token",
+    "hbar",
+    "programmatic"
+  ]
 }
