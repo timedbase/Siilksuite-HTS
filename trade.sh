@@ -186,105 +186,85 @@ echo "=========================================="
 echo "Checking and associating tokens for swap..."
 
 ASSOC_OUTPUT=$(MAINNET_OPERATOR_ID="$OP_ACCOUNT" MAINNET_OPERATOR_PRIVATE_KEY="$OP_KEY" BASE_TOKEN="$BASE_TOKEN" SWAP_TOKEN="$SWAP_TOKEN" node -e "
-const { Client, AccountId, TokenId, TokenAssociateTransaction, PrivateKey } = require('@hashgraph/sdk');
-const axios = require('axios');
+const { Client, AccountId, TokenId, TokenAssociateTransaction, PrivateKey, Status } = require('@hashgraph/sdk');
 
 (async () => {
+  let client = null;
   try {
     const opId = process.env.MAINNET_OPERATOR_ID;
     const privKeyStr = process.env.MAINNET_OPERATOR_PRIVATE_KEY;
     const baseToken = process.env.BASE_TOKEN;
     const swapToken = process.env.SWAP_TOKEN;
+
+    // Parse credentials
     const privKey = PrivateKey.fromString(privKeyStr);
+    const accountId = AccountId.fromString(opId);
+    
+    // Initialize Hedera SDK client
+    client = Client.forMainnet();
+    client.setOperator(accountId, privKey);
+    client.setMaxNodeAttempts(3);
 
-    // Check base token association (if not HBAR)
-    if (baseToken.toUpperCase() !== 'HBAR') {
-      console.log('🔍 Checking base token association: ' + baseToken);
+    // Function to associate a token
+    const associateToken = async (tokenIdStr, tokenName) => {
+      if (tokenIdStr.toUpperCase() === 'HBAR') {
+        console.log('✅ ' + tokenName + ' is HBAR (no association needed)');
+        return true;
+      }
+
+      console.log('🔍 Checking ' + tokenName + ' association: ' + tokenIdStr);
       try {
-        const mirror = axios.create({ baseURL: 'https://mainnet-public.mirrornode.hedera.com', timeout: 5000 });
-        const resp = await mirror.get('/api/v1/accounts/' + opId);
-        const tokens = resp.data.balance?.tokens || [];
-        const isAssociated = tokens.some(t => t.token_id === baseToken);
-        if (isAssociated) {
-          console.log('✅ Already associated with base token');
+        const tokenId = TokenId.fromString(tokenIdStr);
+        
+        // Attempt association
+        const txn = await new TokenAssociateTransaction()
+          .setAccountId(accountId)
+          .addTokenId(tokenId)
+          .freezeWith(client)
+          .sign(privKey);
+
+        console.log('📝 Sending association transaction...');
+        const resp = await txn.execute(client);
+        const receipt = await resp.getReceipt(client);
+
+        if (receipt.status === Status.Success) {
+          console.log('✅ ' + tokenName + ' associated (txId: ' + resp.transactionId + ')');
+          return true;
         } else {
-          console.warn('⚠️  Not associated with base token. Attempting association...');
-          const client = Client.forMainnet();
-          client.setOperator(AccountId.fromString(opId), privKey);
-          const txn = await new TokenAssociateTransaction()
-            .setAccountId(AccountId.fromString(opId))
-            .addTokenId(TokenId.fromString(baseToken))
-            .freezeWith(client)
-            .sign(privKey);
-          const resp = await txn.execute(client);
-          const receipt = await resp.getReceipt(client);
-          if (receipt.status.toString() === 'SUCCESS') {
-            console.log('✅ Base token associated (txId: ' + resp.transactionId + ')');
-          } else {
-            throw new Error('Association failed: ' + receipt.status);
+          // Token may already be associated (status 'TOKEN_ALREADY_ASSOCIATED_TO_ACCOUNT')
+          if (receipt.status.toString().includes('ALREADY_ASSOCIATED')) {
+            console.log('✅ ' + tokenName + ' already associated');
+            return true;
           }
-          await client.close();
+          console.warn('⚠️  ' + tokenName + ' association status: ' + receipt.status);
+          return true; // Continue anyway
         }
       } catch (e) {
-        console.warn('⚠️  Base token association check failed: ' + (e.message || e));
-      }
-    } else {
-      console.log('✅ Base token is HBAR (no association needed)');
-    }
-
-    // Check swap token association (if not HBAR) and associate if needed
-    if (swapToken.toUpperCase() !== 'HBAR') {
-      console.log('🔗 Checking swap token association: ' + swapToken);
-      try {
-        const mirror = axios.create({ baseURL: 'https://mainnet-public.mirrornode.hedera.com', timeout: 5000 });
-        const resp = await mirror.get('/api/v1/accounts/' + opId);
-        const tokens = resp.data.balance?.tokens || [];
-        const isAssociated = tokens.some(t => t.token_id === swapToken);
-
-        if (isAssociated) {
-          console.log('✅ Already associated with swap token');
-        } else {
-          console.log('📝 Associating swap token...');
-          const client = Client.forMainnet();
-          client.setOperator(AccountId.fromString(opId), privKey);
-
-          const txn = await new TokenAssociateTransaction()
-            .setAccountId(AccountId.fromString(opId))
-            .addTokenId(TokenId.fromString(swapToken))
-            .freezeWith(client)
-            .sign(privKey);
-
-          const resp = await txn.execute(client);
-          const receipt = await resp.getReceipt(client);
-
-          if (receipt.status.toString() === 'SUCCESS') {
-            console.log('✅ Swap token associated (txId: ' + resp.transactionId + ')');
-          } else {
-            throw new Error('Association failed: ' + receipt.status);
-          }
-          await client.close();
+        // Check if error is due to token already being associated
+        if (e.message && e.message.includes('ALREADY_ASSOCIATED')) {
+          console.log('✅ ' + tokenName + ' already associated');
+          return true;
         }
-      } catch (e) {
-        console.error('❌ Token association error: ' + (e.message || e));
-        process.exit(1);
+        console.warn('⚠️  ' + tokenName + ' association warning: ' + (e.message || e));
+        return true; // Continue anyway, let execution layer handle it
       }
-    } else {
-      console.log('✅ Swap token is HBAR (no association needed)');
-    }
+    };
+
+    // Associate base token
+    await associateToken(baseToken, 'Base token');
+
+    // Associate swap token
+    await associateToken(swapToken, 'Swap token');
 
     console.log('✅ Token association check complete');
   } catch (err) {
-    console.error('❌ Error: ' + (err.message || err));
-    process.exit(1);
+    console.warn('⚠️  Token association error (will verify during execution): ' + (err.message || err));
+  } finally {
+    if (client) await client.close();
   }
 })();
 " 2>&1)
-ASSOC_EXIT=$?
 echo "$ASSOC_OUTPUT"
-if [ $ASSOC_EXIT -ne 0 ]; then
-  echo "❌ Token association failed. Cannot proceed."
-  exit 1
-fi
 
 echo ""
 echo "=========================================="

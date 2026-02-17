@@ -70,10 +70,10 @@ Alternatively, use Windows Subsystem for Linux (WSL) for full shell script suppo
    ```
 4. **Run the Trading Client**:
    ```bash
-   ./trade.sh
+   bash trade.sh
    ```
 
-**Note**: Termux provides a native terminal environment on Android. All tools run locally on your device. For better performance with CPU-intensive trading, consider running this on a desktop/laptop or cloud server instead.
+**Note**: On Termux, use `bash trade.sh` to run the script. Termux provides a native terminal environment on Android where all tools run locally on your device. For better performance with CPU-intensive trading, consider running this on a desktop/laptop or cloud server instead.
 
 ## 📖 Usage Guide
 
