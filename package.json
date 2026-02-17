@@ -1,0 +1,22 @@
+{
+  "name": "hsuite-programmatic-swap-client",
+  "version": "0.1.0",
+  "description": "Minimal programmatic swap client (HSuite-style): shell entrypoint + JS trade engine",
+  "main": "src/trade.js",
+  "scripts": {
+    "start": "node src/trade.js",
+    "trade": "node src/trade.js",
+    "test-nodes": "node scripts/test-nodes.js"
+  },
+  "dependencies": {
+    "@hashgraph/sdk": "^2.19.0",
+    "axios": "^1.6.0",
+    "socket.io-client": "^4.7.2",
+    "decimal.js": "^10.4.3",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "license": "ISC"
+}
