@@ -128,7 +128,7 @@ function isValidTokenString(t) {
   return /^\d+\.\d+\.\d+$/.test(s);
 }
 
-// Verify token association (read-only check)
+// Verify token association (read-only check with retry)
 // Token association now happens during configuration stage in trade.sh
 // This function verifies the association exists before swap
 async function checkTokenAssociation(network, operatorId, tokenId) {
@@ -137,27 +137,45 @@ async function checkTokenAssociation(network, operatorId, tokenId) {
     return true;
   }
 
-  try {
-    console.log(`🔍 Verifying ${tokenId} association...`);
-    const mirrorClient = axios.create({ baseURL: 'https://mainnet-public.mirrornode.hedera.com', timeout: 10000 });
-    const acctResp = await mirrorClient.get(`/api/v1/accounts/${operatorId}`);
+  const maxRetries = 5;
+  const retryDelay = 2000; // 2 seconds between retries
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔍 Verifying ${tokenId} association (attempt ${attempt}/${maxRetries})...`);
+      const mirrorClient = axios.create({ baseURL: 'https://mainnet-public.mirrornode.hedera.com', timeout: 10000 });
+      const acctResp = await mirrorClient.get(`/api/v1/accounts/${operatorId}`);
 
-    if (acctResp && acctResp.data && acctResp.data.balance) {
-      const associatedTokens = acctResp.data.balance.tokens || [];
-      const isAssociated = associatedTokens.some((t) => t.token_id === tokenId);
-      
-      if (isAssociated) {
-        console.log(`✅ Token ${tokenId} is associated`);
-        return true;
+      if (acctResp && acctResp.data && acctResp.data.balance) {
+        const associatedTokens = acctResp.data.balance.tokens || [];
+        const isAssociated = associatedTokens.some((t) => t.token_id === tokenId);
+        
+        if (isAssociated) {
+          console.log(`✅ Token ${tokenId} is associated`);
+          return true;
+        } else {
+          // Token not found yet - retry if we haven't maxed out
+          if (attempt < maxRetries) {
+            console.log(`  Token not yet reflected in Mirror Node. Retrying in ${retryDelay/1000}s...`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+            continue;
+          } else {
+            console.error(`❌ Token ${tokenId} is NOT associated after ${maxRetries} attempts.`);
+            return false;
+          }
+        }
+      }
+    } catch (err) {
+      if (attempt < maxRetries) {
+        console.warn(`⚠️  Could not verify token association (network issue). Retrying...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        continue;
       } else {
-        console.error(`❌ Token ${tokenId} is NOT associated. Run configuration stage in trade.sh first.`);
-        return false;
+        console.warn('⚠️  Could not verify token association (network issue) after retries.');
       }
     }
-  } catch (err) {
-    console.warn('⚠️  Could not verify token association (network issue).');
   }
-  return true; // Assume associated if we can't verify
+  return true; // Assume associated if we can't verify after retries
 }
 
 // Fetch HBAR balance from a Hedera account using public key derived from private key

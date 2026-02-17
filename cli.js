@@ -11,13 +11,9 @@ const { Client, AccountId, PrivateKey, TokenId, TokenAssociateTransaction } = re
 const axios = require('axios');
 const { spawn } = require('child_process');
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
-
 // Track active child processes for cleanup
 let activeChildProcess = null;
+let rl = null; // Will be created in main()
 
 // Handle graceful shutdown
 process.on('SIGINT', () => {
@@ -25,7 +21,7 @@ process.on('SIGINT', () => {
   if (activeChildProcess && !activeChildProcess.killed) {
     activeChildProcess.kill();
   }
-  if (!rl.closed) rl.close();
+  if (rl && !rl.closed) rl.close();
   process.exit(1);
 });
 
@@ -33,41 +29,53 @@ process.on('SIGTERM', () => {
   if (activeChildProcess && !activeChildProcess.killed) {
     activeChildProcess.kill();
   }
-  if (!rl.closed) rl.close();
+  if (rl && !rl.closed) rl.close();
   process.exit(1);
 });
 
 const question = (prompt) => new Promise((resolve) => {
-  rl.question(prompt, resolve);
+  if (!rl) throw new Error('Readline interface not initialized');
+  rl.question(prompt, (answer) => {
+    resolve(answer);
+  });
 });
 
 const questionHidden = (prompt) => new Promise((resolve) => {
-  // Use simpler approach - just display asterisks
-  let password = '';
-  const stdin = process.stdin;
+  // Pause readline to take control of stdin
+  if (rl) rl.pause();
   
   process.stdout.write(prompt);
   
+  const stdin = process.stdin;
   stdin.setRawMode(true);
   stdin.resume();
   stdin.setEncoding('utf8');
   
+  let password = '';
   const handler = (char) => {
     if (char === '\n' || char === '\r' || char === '\u0004') {
+      // End of input
       stdin.removeListener('data', handler);
       stdin.setRawMode(false);
       stdin.pause();
       process.stdout.write('\n');
+      
+      // Resume readline after password input
+      if (rl) rl.resume();
       resolve(password);
     } else if (char === '\u0003') {
+      // Ctrl+C
       stdin.removeListener('data', handler);
       stdin.setRawMode(false);
       stdin.pause();
-      process.exit();
-    } else if (char === '\u007f') { // backspace
+      if (rl) rl.resume();
+      process.exit(1);
+    } else if (char === '\u007f' || char === '\b') {
+      // Backspace
       password = password.slice(0, -1);
       process.stdout.write('\b \b');
-    } else {
+    } else if (char.charCodeAt(0) >= 32) {
+      // Printable character
       password += char;
       process.stdout.write('*');
     }
@@ -127,43 +135,57 @@ async function configureSwapParameters() {
   console.log('Step 2: Configure Swap Parameters');
   console.log('='.repeat(50));
   
-  // Base token
-  let baseToken = '0.0.786931';
-  const baseInput = await question(`Base token (HBAR or token id) [${baseToken}]: `);
-  if (baseInput.trim()) {
+  // Base token - required, no default
+  let baseToken = null;
+  while (!baseToken) {
+    const baseInput = await question('Base token (HBAR or token id): ');
+    if (!baseInput.trim()) {
+      console.log('❌ Base token is required');
+      continue;
+    }
     baseToken = baseInput.trim();
+    if (!isValidToken(baseToken)) {
+      console.log(`❌ Invalid token format: ${baseToken}`);
+      baseToken = null;
+      continue;
+    }
   }
   
-  // Validate base token
-  if (!isValidToken(baseToken)) {
-    throw new Error(`Invalid base token: ${baseToken}`);
-  }
-  
-  // Swap token
-  let swapToken = 'HBAR';
-  const swapInput = await question(`Swap token (HBAR or token id) [${swapToken}]: `);
-  if (swapInput.trim()) {
+  // Swap token - required, no default
+  let swapToken = null;
+  while (!swapToken) {
+    const swapInput = await question('Swap token (HBAR or token id): ');
+    if (!swapInput.trim()) {
+      console.log('❌ Swap token is required');
+      continue;
+    }
     swapToken = swapInput.trim();
+    if (!isValidToken(swapToken)) {
+      console.log(`❌ Invalid token format: ${swapToken}`);
+      swapToken = null;
+      continue;
+    }
+    
+    // Ensure base and swap tokens are different
+    const baseNorm = baseToken.toUpperCase();
+    const swapNorm = swapToken.toUpperCase();
+    if (baseNorm === swapNorm) {
+      console.log('❌ Base token and swap token must be different');
+      swapToken = null;
+      continue;
+    }
   }
   
-  // Validate swap token
-  if (!isValidToken(swapToken)) {
-    throw new Error(`Invalid swap token: ${swapToken}`);
+  // Amount - required, no default
+  let baseAmount = null;
+  while (!baseAmount) {
+    const amountInput = await question(`Amount to spend (${baseToken}): `);
+    if (!amountInput.trim()) {
+      console.log('❌ Amount is required');
+      continue;
+    }
+    baseAmount = amountInput.trim();
   }
-  
-  // Ensure base and swap tokens are different
-  const baseNorm = baseToken.toUpperCase();
-  const swapNorm = swapToken.toUpperCase();
-  if (baseNorm === swapNorm) {
-    throw new Error('Base token and swap token must be different');
-  }
-  
-  // Amount
-  const amountInput = await question(`Amount to spend (${baseToken}): `);
-  if (!amountInput.trim()) {
-    throw new Error('Amount is required');
-  }
-  const baseAmount = amountInput.trim();
   
   // Swap mode
   console.log('\nSwap Mode?');
@@ -198,7 +220,10 @@ async function ensureTokenAssociations(accountId, privKey, baseToken, swapToken)
     // Process swap token
     await ensureSingleTokenAssociation(client, accountId, privKey, swapToken, 'Swap token');
     
-    console.log('\n✅ All tokens confirmed associated - ready for swap execution\n');
+    console.log('\n⏳ Waiting for Mirror Node to sync (5 seconds)...');
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
+    console.log('✅ All tokens confirmed associated - ready for swap execution\n');
   } catch (err) {
     console.error(`❌ Token association failed: ${err.message || err}`);
     throw err;
@@ -249,7 +274,7 @@ async function ensureSingleTokenAssociation(client, accountId, privKey, tokenStr
     
     const txn = new TokenAssociateTransaction()
       .setAccountId(AccountId.fromString(accountId))
-      .addTokenId(tokenId);
+      .setTokenIds([tokenId]);
     
     console.log('  Freezing transaction with mainnet...');
     const frozenTxn = await txn.freezeWith(client);
@@ -331,6 +356,12 @@ function isValidToken(token) {
 // === Main Flow ===
 async function main() {
   try {
+    // Create readline interface at the start
+    rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    
     console.log('\n');
     console.log('╔' + '='.repeat(48) + '╗');
     console.log('║' + '  Silksuite DEX Trading Client - MAINNET ONLY  '.padEnd(50) + '║');
@@ -347,14 +378,15 @@ async function main() {
       throw new Error('Private key is required');
     }
     
-    // Close readline before running heavy operations
-    rl.close();
-    
     // Step 1: Validate credentials
     const { privKey } = await validateWalletCredentials(accountId.trim(), privKeyStr.trim());
     
     // Step 2: Configure swap
     const { baseToken, swapToken, baseAmount, snipeMode } = await configureSwapParameters();
+    
+    // Close readline after all prompts are complete
+    rl.close();
+    rl = null;
     
     // Step 3: Ensure token associations
     await ensureTokenAssociations(accountId.trim(), privKey, baseToken, swapToken);
@@ -366,7 +398,7 @@ async function main() {
     process.exit(0);
   } catch (err) {
     console.error(`\n❌ Error: ${err.message || err}`);
-    if (!rl.closed) rl.close();
+    if (rl && !rl.closed) rl.close();
     process.exit(1);
   }
 }
