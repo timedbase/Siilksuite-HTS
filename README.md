@@ -12,7 +12,7 @@ A JavaScript-based trading client for sniping and trading tokens on the **Silksu
 - ✅ **Token Sniping** — Programmatically swap tokens on Silksuite DEX via Smart Nodes
 - ✅ **REST & WebSocket Support** — Uses REST APIs and socket.io for real-time trading
 - ✅ **Smart Node Connectivity Check** — Diagnostic tool to test node health
-- ✅ **Cross-Platform Support** — Works on Windows (PowerShell), Linux/Mac, and Android (Termius)
+- ✅ **Cross-Platform Support** — Works on Windows (PowerShell), Linux/Mac, and Android (Termux)
 
 ## 📋 Prerequisites
 
@@ -53,23 +53,27 @@ wsl ./trade.sh
 
 Alternatively, use Windows Subsystem for Linux (WSL) for full shell script support.
 
-### Option 3: Android Terminal (Termius)
+### Option 3: Android Terminal (Termux)
 
-1. **Install Termius** from Google Play Store
-2. **Enable SSH Key** — Create or import your SSH key in Termius settings
-3. **Add New Host**:
-   - Hostname: Your server IP (or use local development)
-   - Port: 22
-   - Auth: SSH Key
-4. **Connect & Clone Repository**:
+1. **Install Termux** from Google Play Store or [F-Droid](https://f-droid.org/packages/com.termux/)
+2. **Install Required Tools**:
+   ```bash
+   pkg update
+   pkg install git
+   pkg install nodejs
+   ```
+3. **Clone & Setup Repository**:
    ```bash
    git clone https://github.com/timedbase/Siilksuite-HTS.git
    cd Siilksuite-HTS
    npm install
+   ```
+4. **Run the Trading Client**:
+   ```bash
    ./trade.sh
    ```
 
-**Tip**: For better mobile experience, use a lightweight Linux SSH server or develop locally and deploy to a cloud server (DigitalOcean, Linode, AWS).
+**Note**: Termux provides a native terminal environment on Android. All tools run locally on your device. For better performance with CPU-intensive trading, consider running this on a desktop/laptop or cloud server instead.
 
 ## 📖 Usage Guide
 
