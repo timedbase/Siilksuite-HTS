@@ -100,18 +100,23 @@ Step 1: Validating Wallet Credentials
 
 ### Step 2: Configure Swap Parameters & Choose Mode
 
-After wallet validation, enter swap configuration:
+After wallet validation, you'll be prompted to enter swap configuration. **All inputs are required** (no default values):
 
 ```
-Base token (HBAR or token id e.g. 0.0.786931) [0.0.786931]: 
-Swap token (HBAR or token id e.g. 0.0.786931) [HBAR]: 
-Amount to spend (HBAR): 
+Base token (HBAR or token id): 0.0.786931
+Swap token (HBAR or token id): HBAR
+Amount to spend (0.0.786931): 5000
 
 Swap Mode?
   1) Regular Swap (execute immediately)
   2) Snipe Mode (monitor pool for 5 hours, execute when found)
-Choose mode [1]: 
+Choose mode [1]: 1
 ```
+
+**Important Notes**:
+- Base and swap tokens **must be different** (cannot swap token to itself)
+- If you press Enter without entering a value, you'll be re-prompted
+- The mode prompt defaults to 1 (Regular Swap) if you press Enter
 
 **Supported Token Formats**:
 - `HBAR` — Hedera's native token (no association needed)
@@ -123,37 +128,60 @@ Choose mode [1]:
 
 ### Step 3: Token Association (Configuration Stage)
 
-The script automatically checks and associates tokens if needed:
+The script automatically checks and associates tokens via Hedera SDK if needed:
 
 ```
-==========================================
+==================================================
 Step 3: Ensuring Token Associations
-==========================================
-🔍 Checking base token association: 0.0.786931
-✅ Already associated with base token
+==================================================
 
-🔗 Checking swap token association: HBAR
-✅ Swap token is HBAR (no association needed)
+==================================================
+Processing: Base token
+==================================================
+✅ Base token is HBAR (no association needed)
 
-✅ Token association check complete
+==================================================
+Processing: Swap token
+==================================================
+🔍 Checking Swap token association: 0.0.10174655
+  Querying Mirror Node...
+  Token not yet associated - will proceed with association
+📝 Creating TokenAssociateTransaction...
+  Freezing transaction with mainnet...
+🔑 Signing with provided private key...
+  ✅ Transaction signed
+🚀 Submitting to Hedera network...
+  Transaction ID: 0.0.10031252@1771351325.021470996
+⏳ Waiting for receipt...
+✅ Swap token successfully associated (txId: 0.0.10031252@1771351325.021470996)
+⏳ Waiting for Mirror Node to sync (5 seconds)...
+✅ All tokens confirmed associated - ready for swap execution
 ```
 
-**Important**: Token associations are handled during this configuration stage, not during swap execution. This ensures smooth swaps without delays.
+**How It Works**:
+- Token associations are created using **Hedera SDK TokenAssociateTransaction** (pure JavaScript, no shell commands)
+- The script waits 5 seconds after association to allow Mirror Node to sync
+- This ensures the swap engine can immediately verify associations in Step 4
 
 ### Step 4: Execute Swap (Regular or Snipe)
 
 **For Regular Swap Mode:**
 Once configuration is complete, the trading engine:
-1. Verifies token associations
+1. **Verifies token associations** (with retry logic — retries up to 5 times, 2-second delays)
 2. Connects to available Smart Nodes via WebSocket
 3. Requests an unsigned swap transaction
 4. Signs the transaction locally with your private key
 5. Submits the signed transaction for execution
 6. Displays transaction receipt and status
 
+**Token Association Verification (Enhanced)**:
+- If Mirror Node hasn't synced yet, the engine retries up to 5 times
+- Each retry waits 2 seconds, allowing network propagation
+- This handles timing issues between blockchain settlement and Mirror Node sync
+
 **For Snipe Mode:**
 The script monitors continuously for the target pool:
-1. Queries Smart Nodes every 650ms for available liquidity pools
+1. Queries Smart Nodes every 850ms for available liquidity pools
 2. Searches for the specified token pair (base ↔ swap)
 3. **When pool is found:** Automatically executes the swap as above
 4. If pool not found within 5 hours: Monitoring stops (timeout)
@@ -161,8 +189,8 @@ The script monitors continuously for the target pool:
 
 **Example Snipe Mode Output**:
 ```
-⏱️ Next check in 650ms... (check 1/27463)
-⏱️ Next check in 650ms... (check 2/27463)
+⏱️ Next check in 850ms... (check 1/27463)
+⏱️ Next check in 850ms... (check 2/27463)
 ✅ POOL FOUND! Executing swap...
 🔄 Executing swap: 5000 0.0.786931 → HBAR
 ✅ Swap executed! Txn: 0.0.123456-1234567890-123456
@@ -292,7 +320,7 @@ node cli.js (Interactive Terminal UI - Configuration Stage)
     src/trade.js (Core Trading Engine - Execution)
          │
     REGULAR SWAP    │    SNIPE MODE
-    ├─ Verify assoc │    ├─ Poll /pools/list every 650ms
+    ├─ Verify assoc │    ├─ Poll /pools/list every 850ms
     ├─ Connect WS   │    ├─ Search for token pair
     ├─ Request txn  │    ├─ On pool found:
     ├─ Sign locally │    │  ├─ Verify associations
@@ -352,5 +380,5 @@ This software is provided "as-is" without warranty. Users are responsible for:
 **Version**: 1.1.0  
 **Last Updated**: February 2026  
 **Network**: Hedera Mainnet Only  
-**Snipe Mode Timeout**: 5 hours (650ms polling interval)
+**Snipe Mode Timeout**: 5 hours (850ms polling interval)
 
