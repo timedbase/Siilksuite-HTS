@@ -128,6 +128,38 @@ function isValidTokenString(t) {
   return /^\d+\.\d+\.\d+$/.test(s);
 }
 
+// Verify token association (read-only check)
+// Token association now happens during configuration stage in trade.sh
+// This function verifies the association exists before swap
+async function checkTokenAssociation(network, operatorId, tokenId) {
+  // Skip for HBAR (native token, no association needed)
+  if (tokenId.toUpperCase() === 'HBAR') {
+    return true;
+  }
+
+  try {
+    console.log(`🔍 Verifying ${tokenId} association...`);
+    const mirrorClient = axios.create({ baseURL: 'https://mainnet-public.mirrornode.hedera.com', timeout: 10000 });
+    const acctResp = await mirrorClient.get(`/api/v1/accounts/${operatorId}`);
+
+    if (acctResp && acctResp.data && acctResp.data.balance) {
+      const associatedTokens = acctResp.data.balance.tokens || [];
+      const isAssociated = associatedTokens.some((t) => t.token_id === tokenId);
+      
+      if (isAssociated) {
+        console.log(`✅ Token ${tokenId} is associated`);
+        return true;
+      } else {
+        console.error(`❌ Token ${tokenId} is NOT associated. Run configuration stage in trade.sh first.`);
+        return false;
+      }
+    }
+  } catch (err) {
+    console.warn('⚠️  Could not verify token association (network issue).');
+  }
+  return true; // Assume associated if we can't verify
+}
+
 // Check if account is associated with a token, and associate if not
 // HBAR tokens skip this check (always associated)
 async function ensureTokenAssociation(network, operatorId, operatorPrivateKeyStr, tokenId) {
@@ -480,13 +512,16 @@ async function swapTransactionExecute(socket, signedTransaction, timeoutMs = 300
 
 async function main() {
   const argv = parseArgs();
-  const network = (argv.network || process.env.NETWORK || 'mainnet').toLowerCase();
+  
+  // MAINNET ONLY - Ignore any network override attempts
+  const network = 'mainnet';
+  
   const debugMode = Boolean(argv.debug || GLOBAL_DEBUG);
   const snipeMode_enabled = Boolean(argv.snipe);
 
-  // operator credentials - accept either generic OPERATOR_* or network-specific vars
-  const operatorId = process.env.OPERATOR_ID || process.env[`${network.toUpperCase()}_OPERATOR_ID`];
-  const operatorKey = process.env.OPERATOR_PRIVATE_KEY || process.env[`${network.toUpperCase()}_OPERATOR_PRIVATE_KEY`];
+  // operator credentials - mainnet only
+  const operatorId = process.env.MAINNET_OPERATOR_ID;
+  const operatorKey = process.env.MAINNET_OPERATOR_PRIVATE_KEY;
 
   if (!operatorId || !operatorKey) {
     console.error('❌ Missing operator credentials. Provide via environment or use the provided shell entrypoint.');
@@ -533,18 +568,16 @@ async function main() {
   const baseDecimals = Number(argv.baseDecimals || process.env.BASE_DECIMALS || (baseToken === 'HBAR' ? 8 : 4));
   const swapDecimals = Number(argv.swapDecimals || process.env.SWAP_DECIMALS || (swapToken === 'HBAR' ? 8 : 4));
 
-  // === Ensure swap token is associated with account (if not HBAR) ===
+  // === Verify swap token is associated (already configured in trade.sh) ===
   try {
-    await ensureTokenAssociation(network, operatorId, operatorKey, swapToken);
-  } catch (assocErr) {
-    console.error('❌ Token association failed:', assocErr && assocErr.message ? assocErr.message : assocErr);
-    console.warn('⚠️ You may not be able to receive the swap token without association.');
-    // Optionally continue anyway, but let user know
-    const shouldContinue = process.argv.includes('--force') || process.env.FORCE === '1';
-    if (!shouldContinue) {
+    const isAssociated = await checkTokenAssociation(network, operatorId, swapToken);
+    if (!isAssociated) {
+      console.error('❌ Swap token is not associated. Run the configuration stage in trade.sh first.');
       await exitWithCode(1, debugMode);
       return;
     }
+  } catch (assocErr) {
+    console.warn('⚠️ Could not verify token association:', assocErr && assocErr.message ? assocErr.message : assocErr);
   }
 
   console.log(`\n🔧 Network: ${network}`);
@@ -568,7 +601,7 @@ async function snipeMode_activation(network, operatorId, operatorKey, baseToken,
   console.log('Timeout: 3 hours | Press Ctrl+C to stop\n');
 
   const POLL_INTERVAL = 650; // 650ms
-  const MAX_SNIPE_TIME = 3 * 60 * 60 * 1000; // 3 hours in milliseconds
+  const MAX_SNIPE_TIME = 5 * 60 * 60 * 1000; // 5 hours in milliseconds
 
   initCache();
   setupSignalHandlers();
